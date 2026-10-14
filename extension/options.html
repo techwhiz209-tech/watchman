@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Watchman options</title>
+<style>body{font:14px system-ui;background:#0b0e14;color:#dbe2ee;padding:20px;max-width:480px}
+label{display:block;margin:12px 0 4px;color:#7b8798}input{width:100%;padding:8px;background:#11161f;border:1px solid #2a3547;color:#dbe2ee;border-radius:6px}
+button{margin-top:16px;padding:8px 18px;background:#1a2230;color:#dbe2ee;border:1px solid #3fd68c;border-radius:6px;cursor:pointer}
+p{color:#7b8798;font-size:13px}#saved{color:#3fd68c}</style>
+</head>
+<body>
+<h2>Watchman options</h2>
+<p>The extension talks only to the Watchman API on your machine. Nothing leaves localhost.</p>
+<label>API URL</label>
+<input id="apiUrl" placeholder="http://127.0.0.1:8471">
+<label>Token (from ~/.watchman/token)</label>
+<input id="token" type="password" placeholder="paste token">
+<button id="save">Save</button> <span id="saved"></span>
+<script src="options.js"></script>
+</body>
+</html>

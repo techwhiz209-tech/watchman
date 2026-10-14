@@ -1,0 +1,29 @@
+body{width:380px;margin:0;font:13px/1.45 system-ui,sans-serif;background:#0b0e14;color:#dbe2ee}
+header{display:flex;align-items:center;gap:8px;padding:10px 12px;background:#11161f;border-bottom:1px solid #1e2634}
+header strong{font-size:14px;letter-spacing:.5px}
+header button{margin-left:auto;background:#1a2230;color:#dbe2ee;border:1px solid #2a3547;border-radius:6px;cursor:pointer;padding:2px 8px}
+.dot{width:10px;height:10px;border-radius:50%;background:#555}
+.dot.ok{background:#3fd68c}.dot.bad{background:#ff5d5d}
+.muted{color:#7b8798;font-size:12px}
+section{padding:8px 12px;border-bottom:1px solid #141a24}
+h2{font-size:12px;text-transform:uppercase;letter-spacing:1px;color:#7b8798;margin:4px 0 8px}
+.agent{display:flex;align-items:center;gap:8px;padding:6px 0;border-top:1px solid #141a24}
+.agent:first-child{border-top:none}
+.agent .name{flex:1;min-width:0}
+.agent .name small{display:block;color:#7b8798}
+.bar{width:90px;height:6px;background:#1a2230;border-radius:3px;overflow:hidden}
+.bar i{display:block;height:100%}
+.tier{font-size:11px;padding:1px 7px;border-radius:9px;border:1px solid #2a3547}
+.tier.trusted{color:#3fd68c;border-color:#3fd68c}
+.tier.standard{color:#9db4d0}.tier.supervised{color:#e8b33f;border-color:#e8b33f}
+.tier.quarantine{color:#ff5d5d;border-color:#ff5d5d}
+.task{padding:6px 0;border-top:1px solid #141a24}
+.task:first-child{border-top:none}
+.task .row{display:flex;gap:8px;align-items:center}
+.task small{color:#7b8798}
+.task button{background:#1a2230;color:#dbe2ee;border:1px solid #2a3547;border-radius:6px;cursor:pointer;padding:2px 8px;font-size:12px}
+.task button.verify{border-color:#3fd68c;color:#3fd68c}
+.status{font-size:11px;padding:1px 7px;border-radius:9px;background:#1a2230;color:#9db4d0}
+.status.submitted{color:#e8b33f}.status.done{color:#3fd68c}.status.failed{color:#ff5d5d}
+footer{display:flex;justify-content:space-between;padding:8px 12px}
+footer a{color:#7b8798;font-size:12px}

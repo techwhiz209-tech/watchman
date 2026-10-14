@@ -1,0 +1,11 @@
+# Runtime artifacts — never commit
+__pycache__/
+*.pyc
+*.db
+*.sqlite*
+token
+.watchman/
+
+# OS noise
+.DS_Store
+Thumbs.db
