@@ -9,7 +9,7 @@ recorded in a hash-chained ledger you can audit.
 
 ## What it is
 
-Five subsystems in one small tool (a single Python file, standard library only):
+Five subsystems in one small tool (a single Python file, plus the `cryptography` package — `pip install cryptography`):
 
 - **Registry** — every agent, API, tool, platform, or app in one place, each
   with a cryptographic identity (a fingerprint, so a renamed agent can't dodge
@@ -25,6 +25,9 @@ Five subsystems in one small tool (a single Python file, standard library only):
   verifications and theatrics lower it.
 - **Hash-chained ledger** — every record carries the hash of the one before it.
   `ledger verify` recomputes the whole chain: tampering shows up immediately.
+  Since v0.2.0 every record is also signed by the registry's Ed25519 key;
+  `ledger verify` checks each signature too, and pre-signing records are
+  accepted as legacy.
 
 Phase 1 adds the enforcement half:
 
@@ -48,31 +51,36 @@ open tasks, and a Verify button over a token-gated localhost API.
   checkpoint`).
 - The kill switch stops registry-gated work. It can't reach into model weights
   or stop an agent running outside this registry.
-- Agent identity crypto is a labeled placeholder (stdlib has no Ed25519): a
-  unique, stable, unpredictable fingerprint — not real asymmetric crypto. The
-  swap seam is documented in DESIGN.md.
+- Agent identity is real Ed25519 crypto since v0.2.0: every agent gets a real
+  keypair at registration (fingerprint = sha256 of the public key), and every
+  ledger record is signed by the registry's own Ed25519 key. The registry
+  holds the private halves of its own locally-generated keys — never
+  third-party secrets. The identity seam is documented in DESIGN.md.
 - The theatrics flag is a heuristic (certainty-language + failed checks). It
   prices a behavior; it doesn't prove intent. Appeals exist for exactly this.
 
 ## Quickstart
 
-One Python file, standard library only — no installs, no Docker, no network.
+One Python file plus one dependency — no Docker, no network.
 
 ```bash
 # 1. Copy the project somewhere convenient (no build step)
 cp -r /path/to/cloned/watchman ~/watchman
 
-# 2. Initialize: creates the registry database and seed SOPs
+# 2. Install the one dependency (Ed25519 identity and ledger signing need it)
+pip install cryptography
+
+# 3. Initialize: creates the registry database and seed SOPs
 python3 ~/watchman/watchman.py init
 
-# 3. Register an agent and give it work
+# 4. Register an agent and give it work
 python3 ~/watchman/watchman.py agent register --name "my-agent" --kind agent --location local
 python3 ~/watchman/watchman.py task create --agent agent_my-agent --sop agent-task-standard --title "Research X"
 
-# 4. The gate: only this moves a task to done
+# 5. The gate: only this moves a task to done
 python3 ~/watchman/watchman.py task verify --id <task> --approver your-name
 
-# 5. Verify the chain yourself
+# 6. Verify the chain yourself
 python3 ~/watchman/watchman.py ledger verify
 ```
 

@@ -33,15 +33,20 @@ one and no outsider could inspect its books. Phase 1 closes those gaps:
 | 7 | **Kill-switch actuator** — operator-only halt/resume. Halt freezes every live task (`open`/`in_progress`/`submitted` → `halted`, prior status saved), blocks new tasks, and chains a `halt` record with reason + actor + fingerprint. Resume restores pre-halt states and chains a `resume` record. Deliberately CLI-only: no HTTP endpoint, no agent-facing command — the switch belongs to the operator, never to the thing being switched off. | `agent halt <name\|fingerprint> --reason "..."`, `agent resume <name\|fingerprint>` | built |
 | 8 | **Incident reporter** — 24-hour clock, on the record. `incident report` creates a hash-chained incident with deadline = now + 24h (computed, never remembered); `incident list` shows open incidents with live countdowns; `incident resolve` closes with a note and chains `incident.resolved`. Maps to the NYC 24-hour AI-safety-incident reporting duty for city contractors. | `incident report --agent … --kind … --summary …`, `incident list`, `incident resolve <id> --note …` | built |
 
-**Honest note on the identity crypto:** the file is stdlib-only by design, and
-the stdlib has no Ed25519. `identity_generate()` is the single labeled seam:
-today the "public key" is a domain-separated sha256 of a 256-bit secret —
-unique, stable, unpredictable, but NOT a real asymmetric keypair and not usable
-for signatures. When `cryptography` is available, swap the body for real
-Ed25519; fingerprints stay sha256(pubkey) either way. The registry holds the
-private half of its own locally-generated identity keys — never third-party
-secrets; the `cred_ref` (never the value) rule for outside credentials is
-unchanged.
+**Honest note on the identity crypto (v0.2.0 — the swap happened):**
+`identity_generate()` is the single seam, and it now generates real Ed25519
+keypairs with the `cryptography` package (`pip install cryptography` —
+see `requirements.txt`). The "public key" is no longer a domain-separated
+sha256 of a secret: it is a real 32-byte Ed25519 public key, the fingerprint
+stays sha256(pubkey), and the registry holds the private half of its own
+locally-generated identity keys — never third-party secrets. Since v0.2.0
+the registry also holds one Ed25519 signing keypair and signs every ledger
+record at append time (the signed bytes are the record hash's preimage:
+prev_hash + payload_hash + ts + kind + actor), so `ledger verify` checks the
+hash chain and each signature. Records written before signing existed carry
+no signature and are accepted as legacy — the chain format never changed, so
+old databases keep verifying clean with their head hashes unchanged. The
+`cred_ref` (never the value) rule for outside credentials is unchanged.
 
 ## How the existing work docks in
 

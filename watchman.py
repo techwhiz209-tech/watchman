@@ -2,7 +2,9 @@
 """WATCHMAN v0.1 — local on-device registry + accountability spine for AI agents.
 
 One SQLite database, one hash-chained ledger, one reputation system, one local
-API. Standard library only: runs on any Mac with python3, no installs.
+API. Requires the `cryptography` package for real Ed25519 agent identity
+(Phase 1, Step 1) and for registry signing of every ledger record
+(Phase 1, Step 2); everything else is standard library.
 
 Subsystems:
   registry    every AI entity (local/cloud APIs, tools, platforms, agents, apps)
@@ -43,6 +45,20 @@ import urllib.parse
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+try:
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+        Ed25519PrivateKey, Ed25519PublicKey,
+    )
+    from cryptography.exceptions import InvalidSignature
+    from cryptography.hazmat.primitives.serialization import (
+        Encoding, PrivateFormat, PublicFormat, NoEncryption,
+    )
+except ImportError as _exc:  # Phase 1 Step 1: real Ed25519 needs this package.
+    raise SystemExit(
+        "watchman needs the 'cryptography' package for agent identity "
+        "(pip install cryptography). It is no longer stdlib-only."
+    ) from _exc
+
 VERSION = "0.2.0"
 HOME = Path.home()
 WATCHMAN_DIR = HOME / ".watchman"
@@ -80,25 +96,22 @@ def new_id(prefix):
 
 
 # --------------------------------------------------------------------------
-# agent identity — Phase 1 (2026-10-06)
+# agent identity — Phase 1 (2026-10-06; real Ed25519 since Step 1, 2026-11-05)
 #
-# HONEST NOTE: this file is stdlib-only by design (runs on any Mac with
-# python3, no installs), and the stdlib has no Ed25519 (`cryptography` /
-# `nacl` are not vendored here, and hand-rolling curve math in this file
-# would be worse than a labeled placeholder). So identity_generate() below
-# is the SINGLE SEAM: it returns (priv_hex, pub_hex, fingerprint). Today
-# the "public key" is derived from a 256-bit secret through a
-# domain-separated sha256 — unique per agent, stable across renames,
-# unpredictable — but it is NOT a real asymmetric keypair and MUST NOT be
-# presented as one. There are no signing/verification operations yet.
-# When `cryptography` becomes available, replace the body of
-# identity_generate() with real Ed25519 key generation; fingerprint stays
-# sha256(raw_pubkey_bytes) either way, so fingerprints remain the stable
-# identity across the swap. Identity for counting/fines is ALWAYS the
-# fingerprint, never the display name: a rename must not dodge identity.
+# identity_generate() is the SINGLE SEAM: it returns (priv_hex, pub_hex,
+# fingerprint). Since Step 1 these are REAL Ed25519 keypairs from the
+# `cryptography` package (Option A of the Phase 2 design: registry-held
+# keys, private half never leaves the registry). Fingerprint stays
+# sha256(raw_pubkey_bytes), so fingerprints keep the same shape as the
+# old placeholder and every old record keeps working. Since Step 2
+# (2026-11-07) the registry also SIGNS every ledger record with its own
+# registry-held Ed25519 keypair (same seam, kv-stored) — see
+# registry_signing_keypair() and ledger_append() below.
+# Identity for counting/fines is ALWAYS the fingerprint, never the display
+# name: a rename must not dodge identity.
+# The stdlib-only, no-install property ended with this swap: the
+# `cryptography` package is now required (see import guard above).
 # --------------------------------------------------------------------------
-
-_IDENTITY_DOMAIN = b"watchman-identity-v1"
 
 
 def identity_fingerprint(pub_hex):
@@ -107,11 +120,67 @@ def identity_fingerprint(pub_hex):
 
 
 def identity_generate():
-    """Returns (priv_hex, pub_hex, fingerprint). See seam note above."""
-    seed = secrets.token_bytes(32)
-    pub = hashlib.sha256(_IDENTITY_DOMAIN + b"|pub|" + seed).digest()
-    pub_hex = pub.hex()
-    return seed.hex(), pub_hex, identity_fingerprint(pub_hex)
+    """Returns (priv_hex, pub_hex, fingerprint). Real Ed25519 keypair.
+
+    priv_hex: raw 32-byte private key, hex. pub_hex: raw 32-byte public
+    key, hex. fingerprint: sha256 of the raw public-key bytes — same
+    64-hex shape as before the swap.
+    """
+    priv = Ed25519PrivateKey.generate()
+    priv_raw = priv.private_bytes(Encoding.Raw, PrivateFormat.Raw,
+                                  NoEncryption())
+    pub_raw = priv.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+    return priv_raw.hex(), pub_raw.hex(), identity_fingerprint(pub_raw.hex())
+
+
+# --------------------------------------------------------------------------
+# registry signing key — Phase 1, Step 2 (2026-11-07; design note:
+# SIGNING-DESIGN-2026-11-07.md). One Ed25519 keypair held by the registry,
+# generated with the same identity_generate() seam, stored in kv as raw-key
+# hex (same storage class as the agent private halves: registry-owned,
+# locally generated, never a third-party secret). It signs every ledger
+# record; agent keys stay identity-only. A per-actor scheme was ruled out:
+# most records are written by actors with no agent key (registry, tony,
+# board, extension), so one registry key signs uniformly and the record's
+# actor / agent_fingerprint fields still say who it is about.
+# --------------------------------------------------------------------------
+
+def registry_signing_keypair(con):
+    """Return (Ed25519PrivateKey, pub_hex). Creates the keypair on first
+    use, so pre-signing databases gain signing on their first append
+    under the new binary — no migration step by Tony."""
+    row = con.execute("SELECT value FROM kv WHERE key='registry_signing_privkey'").fetchone()
+    if row:
+        priv = Ed25519PrivateKey.from_private_bytes(bytes.fromhex(row["value"]))
+        pub = con.execute("SELECT value FROM kv WHERE key='registry_signing_pubkey'").fetchone()
+        pub_hex = pub["value"] if pub else priv.public_key().public_bytes(
+            Encoding.Raw, PublicFormat.Raw).hex()
+        return priv, pub_hex
+    priv_hex, pub_hex, _fp = identity_generate()
+    con.execute("INSERT OR REPLACE INTO kv(key,value)"
+                " VALUES('registry_signing_privkey',?)", (priv_hex,))
+    con.execute("INSERT OR REPLACE INTO kv(key,value)"
+                " VALUES('registry_signing_pubkey',?)", (pub_hex,))
+    con.commit()
+    return (Ed25519PrivateKey.from_private_bytes(bytes.fromhex(priv_hex)),
+            pub_hex)
+
+
+def registry_signing_pubkey(con):
+    """Hex public key of the registry signing key, or '' if none exists.
+    Read-only: never creates a key (verification must not mutate)."""
+    row = con.execute("SELECT value FROM kv WHERE key='registry_signing_pubkey'").fetchone()
+    if row:
+        return row["value"]
+    priv = con.execute("SELECT value FROM kv WHERE key='registry_signing_privkey'").fetchone()
+    if priv:
+        try:
+            pub = Ed25519PrivateKey.from_private_bytes(
+                bytes.fromhex(priv["value"])).public_key()
+            return pub.public_bytes(Encoding.Raw, PublicFormat.Raw).hex()
+        except ValueError:
+            return ""
+    return ""
 
 
 # --------------------------------------------------------------------------
@@ -200,7 +269,10 @@ CREATE TABLE IF NOT EXISTS ledger(
   payload TEXT NOT NULL,           -- json
   payload_hash TEXT NOT NULL,
   prev_hash TEXT NOT NULL,
-  hash TEXT NOT NULL
+  hash TEXT NOT NULL,
+  signature TEXT DEFAULT ''       -- hex Ed25519 signature over the record-hash
+                                  -- preimage, by the registry key (Step 2).
+                                  -- '' = legacy pre-signing record.
 );
 CREATE TABLE IF NOT EXISTS kv(key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE IF NOT EXISTS incidents(
@@ -260,6 +332,7 @@ def migrate(con):
     _ensure_column(con, "agents", "fingerprint", "TEXT DEFAULT ''")
     _ensure_column(con, "agents", "status_before_halt", "TEXT DEFAULT ''")
     _ensure_column(con, "tasks", "halted_from", "TEXT DEFAULT ''")
+    _ensure_column(con, "ledger", "signature", "TEXT DEFAULT ''")
     con.execute("""
         CREATE TABLE IF NOT EXISTS incidents(
           id TEXT PRIMARY KEY, agent_id TEXT NOT NULL,
@@ -325,29 +398,53 @@ def ledger_head(con):
     return row["hash"] if row else "0" * 64
 
 
+def _ledger_preimage(prev, payload_hash, ts, kind, actor):
+    """The exact bytes the record hash is computed over — and, since
+    Step 2, the exact bytes the registry signature covers. Signing the
+    preimage binds the signature to the record's chain position, content,
+    time, kind, and actor in one step."""
+    return (prev + payload_hash + ts + kind + actor).encode("utf-8")
+
+
 def ledger_append(con, kind, actor, payload):
-    """Append one record. The ONLY writer is the registry itself (trust boundary)."""
+    """Append one record, signed by the registry key. The ONLY writer is
+    the registry itself (trust boundary). The signature is stored
+    alongside the hash, never folded into it, so it can never change a
+    record hash and old head hashes stay identical."""
     ts = now_iso()
     payload_json = json.dumps(payload, sort_keys=True, separators=(",", ":"),
                               ensure_ascii=True)
     payload_hash = sha256_hex(payload_json.encode("utf-8"))
     prev = ledger_head(con)
-    h = sha256_hex((prev + payload_hash + ts + kind + actor).encode("utf-8"))
+    preimage = _ledger_preimage(prev, payload_hash, ts, kind, actor)
+    h = sha256_hex(preimage)
+    priv, _pub_hex = registry_signing_keypair(con)
+    signature = priv.sign(preimage).hex()
     con.execute(
-        "INSERT INTO ledger(ts,kind,actor,payload,payload_hash,prev_hash,hash)"
-        " VALUES(?,?,?,?,?,?,?)",
-        (ts, kind, actor, payload_json, payload_hash, prev, h))
+        "INSERT INTO ledger(ts,kind,actor,payload,payload_hash,prev_hash,hash,signature)"
+        " VALUES(?,?,?,?,?,?,?,?)",
+        (ts, kind, actor, payload_json, payload_hash, prev, h, signature))
     con.commit()
     return h
 
 
 def ledger_verify(con):
-    """Recompute the entire chain. Returns (ok, problems list)."""
+    """Recompute the entire chain and verify every signature.
+    Returns (ok, problems list). A present signature must verify; an
+    absent one is a legacy pre-signing record and is accepted, so
+    databases created by the pre-signing binary keep verifying clean."""
     problems = []
-    rows = con.execute("SELECT seq,ts,kind,actor,payload,payload_hash,prev_hash,hash"
+    rows = con.execute("SELECT seq,ts,kind,actor,payload,payload_hash,prev_hash,hash,signature"
                        " FROM ledger ORDER BY seq").fetchall()
     prev = "0" * 64
     last_seq = 0
+    pub_hex = registry_signing_pubkey(con)
+    pub = None
+    if pub_hex:
+        try:
+            pub = Ed25519PublicKey.from_public_bytes(bytes.fromhex(pub_hex))
+        except ValueError:
+            problems.append("registry signing key is malformed")
     for r in rows:
         if r["seq"] != last_seq + 1:
             problems.append("seq gap: expected %d got %d" % (last_seq + 1, r["seq"]))
@@ -359,10 +456,22 @@ def ledger_verify(con):
         if recomputed_payload != r["payload_hash"]:
             problems.append("seq %d: payload was altered after recording" % r["seq"])
         recomputed = sha256_hex(
-            (r["prev_hash"] + r["payload_hash"] + r["ts"] + r["kind"]
-             + r["actor"]).encode("utf-8"))
+            _ledger_preimage(r["prev_hash"], r["payload_hash"], r["ts"],
+                             r["kind"], r["actor"]))
         if recomputed != r["hash"]:
             problems.append("seq %d: record hash invalid (tampered)" % r["seq"])
+        sig = r["signature"] or ""
+        if sig:
+            if pub is None:
+                problems.append("seq %d: signed record but no registry signing key"
+                                % r["seq"])
+            else:
+                try:
+                    pub.verify(bytes.fromhex(sig),
+                               _ledger_preimage(r["prev_hash"], r["payload_hash"],
+                                                r["ts"], r["kind"], r["actor"]))
+                except (ValueError, InvalidSignature):
+                    problems.append("seq %d: signature invalid" % r["seq"])
         prev = r["hash"]
     return (len(problems) == 0, problems)
 
@@ -1291,7 +1400,13 @@ def cmd_ledger(args):
         ok, problems = ledger_verify(con)
         if ok:
             n = con.execute("SELECT COUNT(*) c FROM ledger").fetchone()["c"]
+            signed = con.execute("SELECT COUNT(*) c FROM ledger"
+                                 " WHERE signature<>''").fetchone()["c"]
+            pub = registry_signing_pubkey(con)
+            signer = ("registry key " + identity_fingerprint(pub)[:16] + "..."
+                      if pub else "none (pre-signing database)")
             print("chain OK: %d records, head %s" % (n, ledger_head(con)[:16]))
+            print("signatures: %d/%d records signed by %s" % (signed, n, signer))
         else:
             print("CHAIN BROKEN:")
             for p in problems:
